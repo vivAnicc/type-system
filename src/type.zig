@@ -1,13 +1,14 @@
 const std = @import("std");
 
 var arena: *std.heap.ArenaAllocator = undefined;
-var ptr_size: u8 = undefined;
-var registry: std.ArrayList(*const Type) = undefined;
+var ptr_size: usize = undefined;
+var registry: std.ArrayList(*const Self) = undefined;
 
-pub fn init_all(pointer_size: u8, arena_alloc: *std.heap.ArenaAllocator) !void {
+pub fn init_all(pointer_size: usize, arena_alloc: *std.heap.ArenaAllocator) !void {
     ptr_size = pointer_size;
     arena = arena_alloc;
     registry = .init(arena.allocator());
+    Error.init_errors(arena.allocator());
 
     _void = try .new(null, .Void);
     _bool = try .new(null, .Bool);
@@ -15,17 +16,18 @@ pub fn init_all(pointer_size: u8, arena_alloc: *std.heap.ArenaAllocator) !void {
     _usize = try .new(null, .uint(ptr_size));
     _voidptr = try .new(null, .VoidPtr);
     _noreturn = try .new(null, .NoReturn);
-    _error = try .new(null, .Error);
+    _type = try .new(null, .Type);
+    _error = try .new(null, .ERROR);
 }
 
-const Type = @This();
+const Self = @This();
 
 name: []const u8,
 data: Data,
 
-pub fn new(name: ?[]const u8, data: Data) !*const Type {
+pub fn new(name: ?[]const u8, data: Data) !*const Self {
     const type_name = if (name) |n| n else try data.get_name();
-    const self = Type {
+    const self = Self{
         .name = type_name,
         .data = data,
     };
@@ -36,7 +38,7 @@ pub fn new(name: ?[]const u8, data: Data) !*const Type {
         }
     }
 
-    const ptr = try arena.allocator().create(Type);
+    const ptr = try arena.allocator().create(Self);
 
     ptr.* = self;
     try registry.append(ptr);
@@ -44,127 +46,37 @@ pub fn new(name: ?[]const u8, data: Data) !*const Type {
     return ptr;
 }
 
-pub fn exact_eql(left: Type, right: Type) bool {
-    if (std.meta.activeTag(left) != std.meta.activeTag(right)) {
-        return false;
-    }
+var _void: *const Self = undefined;
+var _bool: *const Self = undefined;
+var _isize: *const Self = undefined;
+var _usize: *const Self = undefined;
+var _voidptr: *const Self = undefined;
+var _noreturn: *const Self = undefined;
+var _type: *const Self = undefined;
+var _error: *const Self = undefined;
 
-    return switch (left.data) {
-        .Void => true,
-        .Bool => true,
-        .Int => {
-            const l = left.data.Int;
-            const r = right.data.Int;
-            return l == r;
-        },
-        .UInt => {
-            const l = left.data.UInt;
-            const r = right.data.UInt;
-            return l == r;
-        },
-        .Float => {
-            const l = left.data.Float;
-            const r = right.data.Float;
-            return l == r;
-        },
-        .VoidPtr => true,
-        .NoReturn => true,
-
-        .Mut => {
-            const l = left.data.Mut;
-            const r = right.data.Mut;
-            return l.exact_eql(r.*);
-        },
-        .Named => {
-            const l = left.data.Named;
-            const r = right.data.Named;
-            return l.name == r.name and l.type.exact_eql(r.type.*);
-        },
-        .NewType => {
-            const l = left.data.NewType;
-            const r = right.data.NewType;
-            return l.exact_eql(r.*);
-        },
-
-        .Array => {
-            const l = left.data.Array;
-            const r = right.data.Array;
-            return l.len == r.len and l.type.exact_eql(r.type.*);
-        },
-        .Ptr => {
-            const l = left.data.Ptr;
-            const r = right.data.Ptr;
-            return l.exact_eql(r.*);
-        },
-        .Tuple => {
-            const l = left.data.Tuple;
-            const r = right.data.Tuple;
-
-            if (l.len != r.len) {
-                return false;
-            }
-
-            for (l, r) |li, ri| {
-                if (!li.exact_eql(ri.*)) {
-                    return false;
-                }
-            }
-
-            return true;
-        },
-        .Nullable => {
-            const l = left.data.Nullable;
-            const r = right.data.Nullable;
-            return l.exact_eql(r.*);
-        },
-        .Variant => {
-            const l = left.data.Variant;
-            const r = right.data.Variant;
-
-            if (l.len != r.len) {
-                return false;
-            }
-
-            for (l, r) |li, ri| {
-                if (!li.exact_eql(ri.*)) {
-                    return false;
-                }
-            }
-
-            return true;
-        },
-
-        .Error => true,
-    };
-}
-
-var _void: *const Type = undefined;
-var _bool: *const Type = undefined;
-var _isize: *const Type = undefined;
-var _usize: *const Type = undefined;
-var _voidptr: *const Type = undefined;
-var _noreturn: *const Type = undefined;
-var _error: *const Type = undefined;
-
-pub fn Void() *const Type {
+pub fn Void() *const Self {
     return _void;
 }
-pub fn Bool() *const Type {
+pub fn Bool() *const Self {
     return _bool;
 }
-pub fn Isize() *const Type {
+pub fn Isize() *const Self {
     return _isize;
 }
-pub fn Usize() *const Type {
+pub fn Usize() *const Self {
     return _usize;
 }
-pub fn VoidPtr() *const Type {
+pub fn VoidPtr() *const Self {
     return _voidptr;
 }
-pub fn NoReturn() *const Type {
+pub fn NoReturn() *const Self {
     return _noreturn;
 }
-pub fn Error() *const Type {
+pub fn Type() *const Self {
+    return _type;
+}
+pub fn ERROR() *const Self {
     return _error;
 }
 
@@ -175,6 +87,7 @@ pub fn Error() *const Type {
 // Float,
 // VoidPtr,
 // NoReturn,
+// Type,
 
 // Mut,
 // Named,
@@ -185,58 +98,61 @@ pub fn Error() *const Type {
 // Tuple,
 // Nullable,
 // Variant,
+// Result,
 
-// Error,
+// ERROR,
 
 pub const Data = union(enum) {
     Void,
     Bool,
-    Int: u8,
-    UInt: u8,
-    Float: u8,
+    Int: usize,
+    UInt: usize,
+    Float: usize,
     VoidPtr,
     NoReturn,
+    Type,
 
-    Mut: *const Type,
+    Mut: *const Self,
     Named: Named,
-    NewType: *const Type,
+    NewType: NewType,
 
     Array: Array,
-    Ptr: *const Type,
-    Tuple: []const *const Type,
-    Nullable: *const Type,
-    Variant: []const *const Type,
+    Ptr: *const Self,
+    Tuple: []const *const Self,
+    Nullable: *const Self,
+    Variant: []const *const Self,
+    Result: Result,
 
-    Error,
+    ERROR,
 
-    pub fn int(size: u8) Data {
-        return .{ .Int = size };
+    pub fn int(bits: usize) Data {
+        return .{ .Int = bits };
     }
 
-    pub fn uint(size: u8) Data {
-        return .{ .UInt = size };
+    pub fn uint(bits: usize) Data {
+        return .{ .UInt = bits };
     }
 
-    pub fn float(size: u8) Data {
-        return .{ .Float = size };
+    pub fn float(bits: usize) Data {
+        return .{ .Float = bits };
     }
 
-    pub fn mut(base: *const Type) Data {
+    pub fn mut(base: *const Self) Data {
         return .{ .Mut = base };
     }
 
-    pub fn named(name: ?[]const u8, base: *const Type) Data {
+    pub fn named(name: ?[]const u8, base: *const Self) Data {
         return .{ .Named = .{
             .name = name,
             .type = base,
         } };
     }
 
-    pub fn ptr(base: *const Type) Data {
+    pub fn ptr(base: *const Self) Data {
         return .{ .Ptr = base };
     }
 
-    pub fn nullable(base: *const Type) Data {
+    pub fn nullable(base: *const Self) Data {
         return .{ .Nullable = base };
     }
 
@@ -249,6 +165,7 @@ pub const Data = union(enum) {
             .Float => |val| try std.fmt.allocPrint(arena.allocator(), "f{}", .{val}),
             .VoidPtr => "voidptr",
             .NoReturn => "noreturn",
+            .Type => "type",
 
             .Mut => |val| try std.fmt.allocPrint(arena.allocator(), "mut {s}", .{val.name}),
             .Named => |val| {
@@ -293,18 +210,239 @@ pub const Data = union(enum) {
 
                 return try res.toOwnedSlice();
             },
+            .Result => |val| try std.fmt.allocPrint(arena.allocator(), "!{s}", .{val.type.name}),
 
-            .Error => "ERROR",
+            .ERROR => "ERROR",
+        };
+    }
+
+    // Size in bits
+    pub fn size(self: Data) usize {
+        return switch (self) {
+            .Void => 0,
+            .Bool => 1,
+            .Int => |val| val,
+            .UInt => |val| val,
+            .Float => |val| val,
+            .VoidPtr => ptr_size,
+            .NoReturn => 0,
+            .Type => 0,
+
+            .Mut => |val| val.data.size(),
+            .Named => |val| val.type.data.size(),
+            .NewType => |val| val.type.data.size(),
+
+            .Array => |val| val.len * val.type.data.size(),
+            .Ptr => ptr_size,
+            .Tuple => |val| {
+                var sum: usize = 0;
+                for (val) |t| {
+                    sum += t.data.size();
+                }
+                return sum;
+            },
+            .Nullable => |val| 1 + val.data.size(),
+            .Variant => |val| {
+                if (val.len == 0) {
+                    return 0;
+                }
+                var max: usize = 0;
+                for (val) |t| {
+                    if (max < t.data.size()) {
+                        max = t.data.size();
+                    }
+                }
+                return @log2(val.len) + max;
+            },
+            .Result => |val| @max(ptr_size, val.type.data.size()),
+
+            .ERROR => 0,
+        };
+    }
+
+    pub fn exact_eql(left: Data, right: Data) bool {
+        if (std.meta.activeTag(left) != std.meta.activeTag(right)) {
+            return false;
+        }
+
+        return switch (left) {
+            .Void => true,
+            .Bool => true,
+            .Int => {
+                const l = left.Int;
+                const r = right.Int;
+                return l == r;
+            },
+            .UInt => {
+                const l = left.UInt;
+                const r = right.UInt;
+                return l == r;
+            },
+            .Float => {
+                const l = left.Float;
+                const r = right.Float;
+                return l == r;
+            },
+            .VoidPtr => true,
+            .NoReturn => true,
+            .Type => true,
+
+            .Mut => {
+                const l = left.Mut;
+                const r = right.Mut;
+                return l.exact_eql(r.*);
+            },
+            .Named => {
+                const l = left.Named;
+                const r = right.Named;
+                return l.name == r.name and l.type.exact_eql(r.type.*);
+            },
+            .NewType => {
+                const l = left.NewType;
+                const r = right.NewType;
+                return std.mem.eql(u8, l.name, r.name);
+            },
+
+            .Array => {
+                const l = left.Array;
+                const r = right.Array;
+                return l.len == r.len and l.type.exact_eql(r.type.*);
+            },
+            .Ptr => {
+                const l = left.Ptr;
+                const r = right.Ptr;
+                return l.exact_eql(r.*);
+            },
+            .Tuple => {
+                const l = left.Tuple;
+                const r = right.Tuple;
+
+                if (l.len != r.len) {
+                    return false;
+                }
+
+                for (l, r) |li, ri| {
+                    if (!li.data.exact_eql(ri.data)) {
+                        return false;
+                    }
+                }
+
+                return true;
+            },
+            .Nullable => {
+                const l = left.Nullable;
+                const r = right.Nullable;
+                return l.exact_eql(r.*);
+            },
+            .Variant => {
+                const l = left.Variant;
+                const r = right.Variant;
+
+                if (l.len != r.len) {
+                    return false;
+                }
+
+                for (l, r) |li, ri| {
+                    if (!li.exact_eql(ri.*)) {
+                        return false;
+                    }
+                }
+
+                return true;
+            },
+            .Result => {
+                const l = left.Result;
+                const r = right.Result;
+
+                if (l.type != r.type) {
+                    return false;
+                }
+
+                if (l.errors.len != r.errors.len) {
+                    return false;
+                }
+
+                for (l.errors, r.errors) |el, er| {
+                    if (el.id != er.id) {
+                        return false;
+                    }
+                }
+
+                return true;
+            },
+
+            .ERROR => true,
         };
     }
 };
 
 pub const Named = struct {
     name: ?[]const u8,
-    type: *const Type,
+    type: *const Self,
+};
+
+pub const NewType = struct {
+    name: []const u8,
+    type: *const Self,
+};
+
+pub const Error = struct {
+    name: []const u8,
+    id: usize,
+    type: *const Self,
+
+    var next_id: usize = 0;
+    var errors: std.StringHashMap(*const Error) = undefined;
+
+    pub fn init_errors(alloc: std.mem.Allocator) void {
+        errors = .init(alloc);
+    }
+
+    pub fn get(name: []const u8) ?*const Error {
+        return errors.get(name);
+    }
+
+    pub fn new(name: []const u8, t: *const Self) !*const Error {
+        const res = try errors.getOrPut(name);
+
+        if (!res.found_existing) {
+            res.value_ptr.* = .{
+                .name = name,
+                .id = next_id,
+                .type = t,
+            };
+
+            next_id += 1;
+        }
+
+        return res.value_ptr.*;
+    }
 };
 
 pub const Array = struct {
-    len: u64,
-    type: *const Type,
+    len: usize,
+    type: *const Self,
+};
+
+pub const Result = struct {
+    type: *const Self,
+    // Sorted for ids
+    errors: []const Error,
+
+    pub fn new_in_place(t: *const Self, errors: []Error) Result {
+        std.mem.sort(Error, errors, void, struct {
+            pub fn less_than(_: @TypeOf(void), lhs: Error, rhs: Error) bool {
+                return lhs.id < rhs.id;
+            }
+        }.less_than);
+
+        return .{
+            .type = t,
+            .errors = errors,
+        };
+    }
+
+    pub fn new(t: *const Self, errors: []const Error) !Result {
+        return new_in_place(t, try arena.allocator().dupe(Error, errors));
+    }
 };
