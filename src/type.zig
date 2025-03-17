@@ -1,4 +1,5 @@
 const std = @import("std");
+pub const DataLayout = @import("data.zig").Layout;
 
 var arena: *std.heap.ArenaAllocator = undefined;
 var ptr_size: usize = undefined;
@@ -23,12 +24,14 @@ pub fn init_all(pointer_size: usize, arena_alloc: *std.heap.ArenaAllocator) !voi
 const Self = @This();
 
 name: []const u8,
+size: DataLayout,
 data: Data,
 
 pub fn new(name: ?[]const u8, data: Data) !*const Self {
     const type_name = if (name) |n| n else try data.get_name();
     const self = Self{
         .name = type_name,
+        .size = data.get_size(),
         .data = data,
     };
 
@@ -99,6 +102,7 @@ pub fn ERROR() *const Self {
 // Nullable,
 // Variant,
 // Result,
+// Buildtime,
 
 // ERROR,
 
@@ -122,6 +126,7 @@ pub const Data = union(enum) {
     Nullable: *const Self,
     Variant: []const *const Self,
     Result: Result,
+    Buildtime: *const Self,
 
     ERROR,
 
@@ -154,6 +159,10 @@ pub const Data = union(enum) {
 
     pub fn nullable(base: *const Self) Data {
         return .{ .Nullable = base };
+    }
+
+    pub fn buildtime(base: *const Self) Data {
+        return .{ .Buildtime = base };
     }
 
     pub fn get_name(self: Data) ![]const u8 {
@@ -211,50 +220,90 @@ pub const Data = union(enum) {
                 return try res.toOwnedSlice();
             },
             .Result => |val| try std.fmt.allocPrint(arena.allocator(), "!{s}", .{val.type.name}),
+            .Buildtime => |val| try std.fmt.allocPrint(arena.allocator(), "buildtime {s}", .{val.name}),
 
             .ERROR => "ERROR",
         };
     }
 
-    // Size in bits
-    pub fn size(self: Data) usize {
+    pub fn get_size(self: Data) !DataLayout {
         return switch (self) {
-            .Void => 0,
-            .Bool => 1,
-            .Int => |val| val,
-            .UInt => |val| val,
-            .Float => |val| val,
-            .VoidPtr => ptr_size,
-            .NoReturn => 0,
-            .Type => 0,
+            .Void => .Zero,
+            .Bool => .{ .Single = .{
+                .size = 1,
+            } },
+            .Int => |val| .{ .Single = .{
+                .size = val,
+            } },
+            .UInt => |val| .{ .Single = .{
+                .size = val,
+            } },
+            .Float => |val| .{ .Single = .{
+                .size = val,
+            } },
+            .VoidPtr => .{ .Single = .{
+                .size = ptr_size,
+            } },
+            .NoReturn => .Zero,
+            .Type => .Zero,
 
-            .Mut => |val| val.data.size(),
-            .Named => |val| val.type.data.size(),
-            .NewType => |val| val.type.data.size(),
+            .Mut => |val| val.size,
+            .Named => |val| val.size,
+            .NewType => |val| val.type.size,
 
-            .Array => |val| val.len * val.type.data.size(),
-            .Ptr => ptr_size,
+            .Array => |val| .{ .Repeat = .{
+                .layout = L: {
+                    const p = try arena.allocator().create(DataLayout);
+                    p.* = val.type.size;
+                    break :L p;
+                },
+                .amount = val.len,
+            } },
+            .Ptr => .{ .Single = .{
+                .size = ptr_size,
+                .valid_zero = false,
+            } },
             .Tuple => |val| {
-                var sum: usize = 0;
-                for (val) |t| {
-                    sum += t.data.size();
+                var list = try std.ArrayList(DataLayout).initCapacity(arena.allocator(), val.len);
+                for (val) |v| {
+                    try list.append(v.size);
                 }
-                return sum;
+                return .{ .And = try list.toOwnedSlice() };
             },
-            .Nullable => |val| 1 + val.data.size(),
+            .Nullable => |val| {
+                var inner = val.size;
+                if (inner == .Single and !inner.Single.valid_zero) {
+                    inner.Single.valid_zero = true;
+                    return inner;
+                }
+                const slice = try arena.allocator().alloc(DataLayout, 2);
+                slice[0] = .{ .Single = .{
+                    .size = 1,
+                } };
+                slice[1] = inner;
+                return .{ .And = slice };
+            },
             .Variant => |val| {
-                if (val.len == 0) {
-                    return 0;
+                var list = try std.ArrayList(DataLayout).initCapacity(arena.allocator(), val.len);
+                for (val) |v| {
+                    try list.append(v.size);
                 }
-                var max: usize = 0;
-                for (val) |t| {
-                    if (max < t.data.size()) {
-                        max = t.data.size();
-                    }
-                }
-                return @log2(val.len) + max;
+                const union_layout = DataLayout{ .Or = try list.toOwnedSlice() };
+                const slice = try arena.allocator().alloc(DataLayout, 2);
+                slice[0] = .{ .Tag = val.len };
+                slice[1] = union_layout;
+                return .{ .And = slice };
             },
-            .Result => |val| @max(ptr_size, val.type.data.size()),
+            .Result => |val| {
+                const slice = try arena.allocator().alloc(DataLayout, 2);
+                slice[0] = .{ .Single = .{
+                    .size = ptr_size,
+                    .valid_zero = false,
+                } };
+                slice[1] = val.type.size;
+                return .{ .Or = slice };
+            },
+            .Buildtime => 0,
 
             .ERROR => 0,
         };
@@ -369,6 +418,11 @@ pub const Data = union(enum) {
                 }
 
                 return true;
+            },
+            .Buildtime => {
+                const l = left.Buildtime;
+                const r = right.Buildtime;
+                return l.exact_eql(r.*);
             },
 
             .ERROR => true,
